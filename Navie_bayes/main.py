@@ -12,15 +12,18 @@ def main():
 
     data = pd.read_csv('wine.csv')
     y = data['class'].values
+
     X = data.drop('class', axis=1).values
-    X = normalize(X)
+
+    X = normalize(X)#数据标准化
     label=['best','better','good']
  
 
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.4)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.4)#将数划分为训练集和测试集，标签也做同样的划分
 
-    clf = NaiveBayes()
+    clf = NaiveBayes()#引用朴素贝叶斯分类器
+
     clf.fit(X_train, y_train)
 
 
