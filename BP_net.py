@@ -1,170 +1,156 @@
-# 用于下载和读取MNIST数据的函数
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-import gzip
-import os
-import tensorflow.python.platform
-import numpy
-from six.moves import urllib
-from six.moves import xrange  # pylint: disable=redefined-builtin
-import tensorflow as tf
-SOURCE_URL = 'http://yann.lecun.com/exdb/mnist/'
+import tensorflow as tf 
+
+from tensorflow.examples.tutorials.mnist import input_data
+
+#数据集输入输出节点设置
+
+INPUT_NODE = 784
+OUTPUT_NODE = 10
+
+#配置神经网络的参数
+LAYER1_NODE = 500#隐藏节点数，本模型使用单隐层
+
+BATCH_SIZE = 100#一轮训练中数据个数
+
+LEARNING_RATE_BASE = 0.8#基础学习率
+
+LEARNING_RATE_DECAY = 0.99#学习率的衰减率
+
+REGULARIZATION_RATE = 0.0001#模型复杂度的正则化项在损失函数中的系数
+TRAINING_STEPS = 30000#训练轮数
+MOVING_AVERAGE_DECAY = 0.99#滑动平均衰减率
 
 
-# 若数据不存在，则从Yann的网站下载数据
-def maybe_download(filename, work_directory):
-  if not os.path.exists(work_directory):
-    os.mkdir(work_directory)
-  filepath = os.path.join(work_directory, filename)
-  # 若指定路径不存在,则开始从原网站上下载
-  if not os.path.exists(filepath):
-    filepath, _ = urllib.request.urlretrieve(SOURCE_URL + filename, filepath)
-    statinfo = os.stat(filepath)
-    print('Successfully downloaded', filename, statinfo.st_size, 'bytes.')
-  return filepath
-def _read32(bytestream):
-  dt = numpy.dtype(numpy.uint32).newbyteorder('>')
-  return numpy.frombuffer(bytestream.read(4), dtype=dt)[0]
+def inference(input_tensor, avg_class, weights1, biases1,weights2,biases2):
 
+    #当没有提供滑动平均类时，直接使用参数当前的取值
+    if avg_class == None:
 
-# 将图像提取到一个4维uint8类型的numpy数组[index, y, x, depth]
-def extract_images(filename):
-  print('Extracting', filename)
-  with gzip.open(filename) as bytestream:
-    magic = _read32(bytestream)
-    if magic != 2051:
-      raise ValueError('Invalid magic number %d in MNIST image file: %s' % (magic, filename))
-    num_images = _read32(bytestream)
-    rows = _read32(bytestream)
-    cols = _read32(bytestream)
-    buf = bytestream.read(rows * cols * num_images)
-    data = numpy.frombuffer(buf, dtype=numpy.uint8)
-    data = data.reshape(num_images, rows, cols, 1)
-    return data
+        #计算隐藏层的前向传播结果，使用RELU激活函数
+        layer1 = tf.nn.relu(tf.matmul(input_tensor,weights1) + biases1)#bases1为激活函数中边权重之外的常数系数
 
-# 将类标签从标量转换为一个one-hot向量
-def dense_to_one_hot(labels_dense, num_classes=10):
-  num_labels = labels_dense.shape[0]
-  index_offset = numpy.arange(num_labels) * num_classes
-  labels_one_hot = numpy.zeros((num_labels, num_classes))
-  labels_one_hot.flat[index_offset + labels_dense.ravel()] = 1
-  return labels_one_hot
+        #计算输出层的向前传播结果
+        return tf.matmul(layer1,weights2) + biases2
 
-# 将标签提取到一维uint8类型的numpy数组[index]中
-def extract_labels(filename, one_hot=False):
-  print('Extracting', filename)
-  with gzip.open(filename) as bytestream:
-    magic = _read32(bytestream)
-    if magic != 2049:
-      raise ValueError('Invalid magic number %d in MNIST label file: %s' % (magic, filename))
-    num_items = _read32(bytestream)
-    buf = bytestream.read(num_items)
-    labels = numpy.frombuffer(buf, dtype=numpy.uint8)
-    if one_hot:
-      return dense_to_one_hot(labels)
-    return labels
-
-# 构造DataSet类
-# one_hot arg仅在fake_data为true时使用
-# `dtype`可以是`uint8`，将输入保留为`[0,255]`，或`float32`以重新调整为[0,1]。
-class DataSet(object):
-  def __init__(self, images, labels, fake_data=False, one_hot=False, dtype=tf.float32):
-    dtype = tf.as_dtype(dtype).base_dtype
-    if dtype not in (tf.uint8, tf.float32):
-      raise TypeError('Invalid image dtype %r, expected uint8 or float32' % dtype)
-    if fake_data:
-      self._num_examples = 10000
-      self.one_hot = one_hot
     else:
-      assert images.shape[0] == labels.shape[0], ('images.shape: %s labels.shape: %s' % (images.shape, labels.shape))
-      self._num_examples = images.shape[0]
-      # 将[num examples, rows, columns, depth]转换形状成[num examples, rows*columns] (assuming depth == 1)
-      assert images.shape[3] == 1
-      images = images.reshape(images.shape[0], images.shape[1] * images.shape[2])
-      if dtype == tf.float32:
-        # 将[0, 255]转换为[0.0, 1.0].
-        images = images.astype(numpy.float32)
-        images = numpy.multiply(images, 1.0 / 255.0)
-    self._images = images
-    self._labels = labels
-    self._epochs_completed = 0
-    self._index_in_epoch = 0
-  @property
-  def images(self):
-    return self._images
-  @property
-  def labels(self):
-    return self._labels
-  @property
-  def num_examples(self):
-    return self._num_examples
-  @property
-  def epochs_completed(self):
-    return self._epochs_completed
+        layer1 = tf.nn.relu(tf.matmul(input_tensor,avg_class.average(weights1)) 
+        + avg_class.average(biases1))
 
-  # 从数据集返回下一个`batch_size`示例
-  def next_batch(self, batch_size, fake_data=False):
-    if fake_data:
-      fake_image = [1] * 784
-      if self.one_hot:
-        fake_label = [1] + [0] * 9
-      else:
-        fake_label = 0
-      return [fake_image for _ in xrange(batch_size)], [fake_label for _ in xrange(batch_size)]
-    start = self._index_in_epoch
-    self._index_in_epoch += batch_size
-    # 完成一个epoch
-    if self._index_in_epoch > self._num_examples:
-      # 随机抽取数据
-      self._epochs_completed += 1
-      perm = numpy.arange(self._num_examples)
-      numpy.random.shuffle(perm)
-      self._images = self._images[perm]
-      self._labels = self._labels[perm]
-      # 开始下一个epoch
-      start = 0
-      self._index_in_epoch = batch_size
-      assert batch_size <= self._num_examples
-    end = self._index_in_epoch
-    return self._images[start:end], self._labels[start:end]
+        return tf.matmul(layer1,avg_class.average(weights2) + avg_class.average(biases2))
 
-# 读取训练数据
-def read_data_sets(train_dir, fake_data=False, one_hot=False, dtype=tf.float32):
-  class DataSets(object):
-    pass
-  data_sets = DataSets()
-  # 若fake_data为true则返回空数据
-  if fake_data:
-    def fake():
-      return DataSet([], [], fake_data=True, one_hot=one_hot, dtype=dtype)
-    data_sets.train = fake()
-    data_sets.validation = fake()
-    data_sets.test = fake()
-    return data_sets
-  # 训练和测试数据文件名
-  TRAIN_IMAGES = 'train-images-idx3-ubyte.gz'
-  TRAIN_LABELS = 'train-labels-idx1-ubyte.gz'
-  TEST_IMAGES = 't10k-images-idx3-ubyte.gz'
-  TEST_LABELS = 't10k-labels-idx1-ubyte.gz'
-  VALIDATION_SIZE = 5000
-  # 读取训练和测试数据
-  local_file = maybe_download(TRAIN_IMAGES, train_dir)
-  train_images = extract_images(local_file)
-  local_file = maybe_download(TRAIN_LABELS, train_dir)
-  train_labels = extract_labels(local_file, one_hot=one_hot)
-  local_file = maybe_download(TEST_IMAGES, train_dir)
-  test_images = extract_images(local_file)
-  local_file = maybe_download(TEST_LABELS, train_dir)
-  test_labels = extract_labels(local_file, one_hot=one_hot)
-  # 取前5000个作为验证数据
-  validation_images = train_images[:VALIDATION_SIZE]
-  validation_labels = train_labels[:VALIDATION_SIZE]
-  # 取前5000个以后的作为训练数据
-  train_images = train_images[VALIDATION_SIZE:]
-  train_labels = train_labels[VALIDATION_SIZE:]
-  # 定义训练,验证和测试
-  data_sets.train = DataSet(train_images, train_labels, dtype=dtype)
-  data_sets.validation = DataSet(validation_images, validation_labels, dtype=dtype)
-  data_sets.test = DataSet(test_images, test_labels, dtype=dtype)
-  return data_sets
+
+#训练模型的过程
+def train(mnist):
+    x = tf.placeholder(tf.float32,[None,INPUT_NODE],name = 'x-input')#placeholder机制用于提供数据，意思就是先占一个坑，说我有一个数组在这
+
+    y_ = tf.placeholder(tf.float32,[None,OUTPUT_NODE],name='y-input')
+
+    #生成输入层到隐藏层的边权重
+    weights1 = tf.Variable(
+        tf.truncated_normal([INPUT_NODE,LAYER1_NODE],stddev = 0.1)
+    )
+    #生成偏置项
+    biases1 = tf.Variable(tf.constant(0.1,shape=[LAYER1_NODE]))
+
+    #生成隐藏层到输出层的边权重
+    weights2 = tf.Variable(
+        tf.truncated_normal([LAYER1_NODE,OUTPUT_NODE],stddev = 0.1)
+    )
+    #生成偏置项
+    biases2 = tf.Variable(tf.constant(0.1,shape=[OUTPUT_NODE]))
+
+    #计算神经网前项传播得结果，不使用滑动平均
+
+    y = inference(x,None,weights1,biases1,weights2,biases2)
+
+    #定义训练轮数
+    global_step = tf.Variable(0,trainable=False)
+
+    #滑动平均相关参数
+    varible_averages = tf.train.ExponentialMovingAverage(MOVING_AVERAGE_DECAY,global_step)
+
+    varible_averages_op = varible_averages.apply(tf.trainable_variables())
+
+    average_y = inference(x,varible_averages,weights1,biases1,weights2,biases2)
+
+
+    #计算交叉熵
+    cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(y,tf.argmax(y_,1))
+
+    #计算本轮所有训练样本的交叉熵平均值
+    cross_entropy_mean = tf.reduce_mean(cross_entropy)
+
+    #计算L2正则化损失
+    regularizer = tf.contrib.layers.l2_regularizer(REGULARIZATION_RATE)
+
+    #计算模型的正则化损失，一般只计算神经网络边上权重，不使用偏置项
+    regularization = regularizer(weights1) + regularizer(weights2)
+
+    #总损失等于交叉熵损失和正则化损失的和
+    loss = cross_entropy_mean + regularization
+
+    #设置指数衰减的学习率
+    learning_rate = tf.train.exponential_decay(
+        LEARNING_RATE_BASE,
+        global_step,
+        mnist.train.num_examples / BATCH_SIZE,
+        LEARNING_RATE_DECAY
+    )
+    
+
+    #梯度下降优化算法来优化损失函数
+    train_step = tf.train.GradientDescentOptimizer(learning_rate)\
+        .minimize(loss,global_step=global_step)
+
+
+    #神经网络模型训练时，即需要通过反向传播来更新神经网络中的参数，又要更新每一个参数的滑动平均值
+    with tf.control_dependencies([train_step,varible_averages_op]):
+        train_op = tf.no_op(name='train')
+
+
+
+    correct_prediction = tf.equal(tf.argmax(average_y,1),tf.argmax(y_,1))
+
+    accuracy = tf.reduce_mean(tf.cast(correct_prediction,tf.float32))
+
+
+
+    #初始化会话并开始训练过程
+    with tf.Session() as sess:
+        tf.global_variables_initializer().run()
+        #准备验证数据
+
+        validate_feed = {x:mnist.validation.images,
+                        y:mnist.validation.lables
+                        }
+
+        #准备测试数据，作为模型优劣的评价标准
+        test_feed = {x:mnist.test.images,
+                    y:mnist.test.lables
+                    }
+
+        #迭代的训练神经网络
+        for i in range(TRAINING_STEPS):
+            #每1000轮输出一次在验证数据集上的测试结果
+            if i%1000 == 0:
+                validate_acc = sess.run(accuracy,feed_dict=validate_feed)
+                print('after {} steps,validation is {}'.format(i,validate_acc))
+
+            #产生这一轮使用的一个batch的训练数据，并运行训练过程
+            xs,ys = mnist.train.next_batch(BATCH_SIZE)
+
+            sess.run(train_op,feed_dict={x:xs,y_:ys})
+
+        test_acc = sess.run(accuracy,feed_dict=test_feed)
+
+        print('after {} steps,test accuracy is {}'.format(TRAINING_STEPS,test_acc))
+
+
+    #主程序入口
+
+def main(argv=None):
+    mnist = input_data.read_data_sets('E:/course-work/DataMining/DeepLearning/MNIST_data',one_hot='True')
+    train(mnist)
+
+if __name__ == '__main__':
+    main()
